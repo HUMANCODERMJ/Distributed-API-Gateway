@@ -6,5 +6,13 @@ app = FastAPI()
 
 @app.get("/")
 async def root(request: Request):
-    setValue()
-    return {"message" : status.HTTP_200_OK}
+    await setValue()
+    return {"message": status.HTTP_200_OK}
+
+@app.get("/proxy")
+async def proxy(request: Request):
+    response = dummy_backend()
+    return response
+
+def dummy_backend():
+    return {"message": "backend response"}

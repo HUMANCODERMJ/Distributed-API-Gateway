@@ -1,5 +1,6 @@
-import redis
-r = redis.Redis(host='localhost', port=6379, decode_responses=True)
+from redis.asyncio import Redis
 
-def setValue():
-    r.set(1,"Hello")
+r = Redis(host='localhost', port=6379, decode_responses=True)
+
+async def setValue():
+    await r.set(1, "Hello")
