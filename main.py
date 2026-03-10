@@ -1,4 +1,4 @@
-from fastapi import FastAPI, Request, status
+from fastapi import FastAPI, Request, status, HTTPException
 from redis_client import r
 
 
@@ -12,17 +12,28 @@ async def root(request: Request):
 async def proxy(request: Request):
     script = """
     local key = KEYS[1]
+    local limit = tonumber(ARGV[1])
     local count = redis.call('INCR', key)
     if count == 1 then
         redis.call('EXPIRE', key, 60)
     end
-    return count
+    local allowed = 1
+    if count > limit then
+        allowed = 0
+    end
+    return {count, allowed}
     """
-    r.incr
-    count = await r.eval(script, 1, "gateway:minute_counter")
-    response = dummy_backend()
+
+    limit = 10
+    result = await r.eval(script, 1, "gateway:minute_counter", limit)
+    count, allowed = result[0], result[1]
+
+    if allowed == 0:
+        raise HTTPException(status_code=429, detail="Rate limit exceeded")
+
+    response = final_response()
     response["request_count"] = count
     return response
 
-def dummy_backend():
+def final_response():
     return {"message": "backend response"}
