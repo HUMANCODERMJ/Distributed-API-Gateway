@@ -1,263 +1,249 @@
-# Redis Architecture and Systems Design
+"""
+Distributed API Gateway - Phase 1
 
-# 1. What Redis Actually Is
+A lightweight, modular reverse proxy gateway built with FastAPI that forwards requests to downstream services with rate limiting and request logging.
 
-Redis is best described as:
+## Architecture Overview
 
-> **An in‑memory data structure server with optional persistence.**
+```
+Client Request
+    ↓
+[Gateway - Port 8000]
+    ├─ Request Logger Middleware
+    ├─ Rate Limiting (Redis)
+    ├─ Route Matching
+    ├─ Request Forwarding
+    └─ Response Return
+    ↓
+[Downstream Services]
+    ├─ User Service (Port 8001)
+    ├─ Order Service (Port 8002)
+    └─ AI Service (Port 8003)
+```
 
-Unlike traditional relational databases such as PostgreSQL or MySQL, Redis does not primarily operate around tables and rows.
+## Project Structure
 
-Instead it exposes **native data structures** that can be manipulated directly.
+```
+app/
+├── core/              # Configuration and logging setup
+│   ├── config.py      # Centralized configuration (routes, Redis, timeouts)
+│   └── logging_config.py  # Logging setup
+├── routes/            # HTTP route handlers
+│   └── proxy.py       # Catch-all proxy endpoint with rate limiting
+├── services/          # Business logic layer
+│   ├── proxy_service.py   # Request forwarding logic
+│   └── redis_service.py   # Redis operations (rate limiting)
+├── middleware/        # HTTP middleware
+│   └── request_logger.py  # Request/response logging
+├── utils/             # Utilities
+│   └── helpers.py     # Helper functions
+└── main.py            # FastAPI app entry point
 
-These include:
+downstream_services/  # Test/dummy downstream services
+├── user_service/      # Port 8001
+├── order_service/     # Port 8002
+└── ai_service/        # Port 8003
+```
 
-* Strings
-* Lists
-* Sets
-* Hashes
-* Sorted Sets (ZSET)
-* Streams
-* Bitmaps
-* HyperLogLogs
+## Features
 
-This design allows Redis to perform complex operations **directly inside the server** rather than transferring raw data to the application.
+✅ **Request Forwarding** - Forwards HTTP requests to downstream services preserving method, headers, query params, and body
+✅ **Route Matching** - Path-prefix based route matching configuration in `app/core/config.py`
+✅ **Rate Limiting** - Redis-backed rate limiting with atomic Lua scripts
+✅ **Request Logging** - Middleware logs incoming requests and response status/timing
+✅ **Health Checks** - `/health` and `/readiness` endpoints for monitoring
+✅ **Error Handling** - Proper error responses for routing failures and downstream errors
+✅ **Async Throughout** - All operations are fully async using httpx and aioredis
+
+## Setup and Running
+
+### Prerequisites
+
+- Python 3.8+
+- Redis server running on localhost:6379
+- Virtual environment (recommended)
+
+### Installation
+
+1. **Create and activate virtual environment**:
+   ```bash
+   python -m venv .venv
+   # Windows
+   .venv\Scripts\activate
+   # macOS/Linux
+   source .venv/bin/activate
+   ```
+
+2. **Install dependencies**:
+   ```bash
+   pip install -r requirements.txt
+   ```
+
+### Running the Gateway
+
+Start the main gateway:
+
+```bash
+python -m uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
+```
+
+Or using the entry point:
+
+```bash
+python app/main.py
+```
+
+### Running Downstream Services
+
+Start each downstream service in separate terminals:
+
+```bash
+# Terminal 1 - User Service (Port 8001)
+python downstream_services/user_service/main.py
+
+# Terminal 2 - Order Service (Port 8002)
+python downstream_services/order_service/main.py
+
+# Terminal 3 - AI Service (Port 8003)
+python downstream_services/ai_service/main.py
+```
+
+## Testing the Gateway
+
+### Check Gateway Health
+
+```bash
+curl http://localhost:8000/health
+# Response: {"status": "healthy"}
+```
+
+### Test User Service Routing
+
+```bash
+# List all users
+curl http://localhost:8000/users
+
+# Get specific user
+curl http://localhost:8000/users/1
+```
+
+### Test Order Service Routing
+
+```bash
+# List all orders
+curl http://localhost:8000/orders
+
+# Get specific order
+curl http://localhost:8000/orders/101
+```
+
+### Test AI Service Routing
+
+```bash
+# Test endpoint
+curl http://localhost:8000/ai/test
+
+# Chat endpoint (requires JSON body)
+curl -X POST http://localhost:8000/ai/chat \
+  -H "Content-Type: application/json" \
+  -d '{"message": "hello"}'
+```
+
+### Test Rate Limiting
+
+Make 11+ requests within 60 seconds to trigger the 10-request limit:
+
+```bash
+for i in {1..15}; do curl http://localhost:8000/users; done
+# After 10 requests, you'll get: {"error": "Rate limit exceeded"}
+```
+
+## Configuration
+
+Edit `app/core/config.py` to modify:
+
+- **Routes**: Add/remove downstream service mappings
+- **Redis Settings**: Change host, port, database
+- **Rate Limiting**: Adjust request limits and time windows
+- **HTTP Client**: Modify timeouts and connection pool size
+- **Logging Level**: Set DEBUG, INFO, WARNING, ERROR
 
 Example:
 
-Instead of:
-
-Application → fetch data → modify → send back
-
-Redis allows:
-
-Application → send command → Redis modifies data atomically
-
-This greatly reduces network overhead and improves performance.
-
----
-
-# 2. Why Redis Is Extremely Fast
-
-Redis performance is the result of several architectural decisions working together.
-
-## 2.1 In‑Memory Storage
-
-The entire working dataset is stored in **RAM**.
-
-Latency comparison:
-
-| Storage   | Typical Latency |
-| --------- | --------------- |
-| CPU cache | ~1 ns           |
-| RAM       | ~100 ns         |
-| SSD       | ~100 μs         |
-| HDD       | ~10 ms          |
-
-RAM access is **thousands to millions of times faster than disk access**.
-
-Because Redis performs operations in memory, it avoids disk I/O during normal operation.
-
----
-
-## 2.2 Single‑Threaded Command Execution
-
-Redis executes commands on a **single main thread**.
-
-Benefits:
-
-* No locks
-* No mutex contention
-* No race conditions inside the core
-* No context switching overhead
-* Deterministic execution order
-
-Every command is processed sequentially.
-
-This means:
-
-```
-Client A → INCR counter
-Client B → INCR counter
+```python
+ROUTES = {
+    "/users": "http://localhost:8001",
+    "/orders": "http://localhost:8002",
+    "/ai": "http://localhost:8003",
+    "/payments": "http://payment-service:8004",  # Add new service
+}
 ```
 
-Execution order is guaranteed.
-
-The counter will always be incremented twice without corruption.
-
-This gives Redis **built‑in atomicity for single commands**.
-
----
-
-## 2.3 Event Loop and Reactor Pattern
-
-Redis uses an **event‑driven architecture**.
-
-The main thread runs an **event loop** which continuously processes:
-
-1. Network events
-2. Client commands
-3. Background tasks
-
-The design follows the **Reactor Pattern**.
-
-### Key Components
-
-**Call Stack (LIFO)**
-
-Commands such as:
-
-```
-GET key
-SET key value
-```
-
-are executed synchronously on the stack.
-
-**I/O Multiplexing**
-
-Redis uses OS mechanisms such as:
-
-* epoll (Linux)
-* kqueue (BSD/macOS)
-
-Instead of waiting for each client connection individually, Redis asks the kernel:
-
-> "Notify me only when a socket is ready to read or write."
-
-This allows thousands of connections to be handled efficiently by a single thread.
-
-**Event Queue**
-
-Once the kernel detects a ready socket, the event is pushed into a queue and processed by Redis.
-
----
-
-## 2.4 CPU Cache Efficiency
-
-Because Redis runs on a single thread:
-
-* Memory access patterns are predictable
-* CPU cache locality is preserved
-* Cache‑line bouncing between cores is avoided
-
-This dramatically improves L1/L2 cache efficiency.
-
----
-
-## 2.5 Efficient Internal Data Structures
-
-Redis uses highly optimized structures internally:
-
-* Hash tables
-* Skip lists (used in Sorted Sets)
-* Compact encodings
-* SDS (Simple Dynamic Strings)
-
-Most operations are:
-
-* **O(1)** constant time
-* **O(log n)** logarithmic time
-
-This predictable complexity enables extremely high throughput.
-
----
-
-# 3. The Single‑Threaded Event Loop Model
-
-Redis's core execution model revolves around a **single‑threaded event loop**.
-
-### Workflow
-
-1. Clients send commands via TCP sockets
-2. OS kernel detects socket readiness
-3. Event loop processes the command
-4. Redis executes command in memory
-5. Response returned to client
-
-Because commands execute sequentially, Redis guarantees:
-
-* Atomic command execution
-* Deterministic behavior
-
-### Head‑of‑Line Blocking
-
-The downside of this model is that **long‑running commands block all clients**.
-
-Examples of dangerous commands:
-
-* `KEYS *`
-* Large Lua scripts
-* Huge multi‑key operations
-
-If a command takes 2 seconds, **all clients wait 2 seconds**.
-
----
-
-# 4. Key‑Value Storage Model
-
-Redis stores data as:
-
-```
-Key → Value
-```
-
-Keys are unique identifiers.
-
-Values are Redis data structures.
-
-Example:
-
-```
-user:1001 → {name: "Alice", age: 30}
-```
-
-### Complexity Examples
-
-| Command | Complexity |
-| ------- | ---------- |
-| GET     | O(1)       |
-| SET     | O(1)       |
-| LPUSH   | O(1)       |
-| HSET    | O(1)       |
-| ZADD    | O(log n)   |
-| KEYS *  | O(N)       |
-
-`KEYS *` scans the entire dataset and blocks Redis.
-
-In production systems, `SCAN` is used instead.
-
----
-
-# 5. Persistence: Bridging RAM and Disk
-
-RAM is volatile.
-
-To prevent total data loss, Redis offers persistence mechanisms.
-
----
-
-## 5.1 RDB (Redis Database Snapshot)
-
-RDB creates **point‑in‑time snapshots** of the dataset.
-
-Stored as:
-
-```
-dump.rdb
-```
-
-### Mechanism
-
-Redis forks a child process.
-
-The child process writes the snapshot to disk while the parent continues serving clients.
-
-### Advantages
-
-* Compact file
-* Fast restart
-* Minimal runtime overhead
+## Request Flow
+
+1. **Incoming Request** → Gateway (port 8000)
+2. **Request Logger Middleware** → Logs method, path, client
+3. **Rate Limit Check** → Redis counter atomically incremented
+   - If exceeded (>10 in 60s) → 429 response
+   - If allowed → Continue
+4. **Route Matching** → Path prefix matched to downstream URL
+   - If no match → 404 response
+   - If match → Continue
+5. **Request Forwarding** → httpx forwards to downstream service
+   - Preserves method, headers, query params, body
+6. **Response Return** → Downstream response returned as-is
+   - Status code, headers, content preserved
+
+## Known Limitations (Phase 1)
+
+- No request/response caching
+- No retry logic for failed requests
+- No load balancing across multiple instances
+- No circuit breaker pattern
+- No request authentication/authorization
+- No request/response transformation
+- Routing is simple prefix matching only
+
+These will be addressed in future phases.
+
+## Architecture Decisions
+
+### Why httpx over requests?
+
+- Async/await support out of the box
+- Connection pooling
+- Better for high-throughput gateway scenarios
+
+### Why Lua scripts for rate limiting?
+
+- Atomic operations without race conditions
+- Single round-trip to Redis
+- Window-based counters with automatic expiration
+
+### Why middleware over route decorators?
+
+- Applies to all routes uniformly
+- Easier to add/remove global behaviors
+- Better separation of concerns
+
+### Why service classes over functions?
+
+- Centralized resource management (client lifecycle)
+- Reusable across routes
+- Easier testing and mocking
+
+## Future Extensions (Phase 2+)
+
+- [ ] Request caching with Redis
+- [ ] Retry logic with exponential backoff
+- [ ] Load balancing (round-robin, least connections)
+- [ ] Circuit breaker pattern
+- [ ] Request/response compression
+- [ ] Authentication (API keys, JWT)
+- [ ] Request transformation/sanitization
+- [ ] Metrics collection (Prometheus)
+- [ ] Distributed tracing (OpenTelemetry)
+- [ ] GraphQL gateway support
 
 ### Disadvantages
 
