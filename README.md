@@ -1,5 +1,4 @@
-"""
-Distributed API Gateway - Phase 1
+# Distributed API Gateway
 
 A lightweight, modular reverse proxy gateway built with FastAPI that forwards requests to downstream services with rate limiting and request logging.
 
